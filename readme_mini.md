@@ -545,37 +545,37 @@ exit 0
 Backup и восстановление
 Filer backup
 bash
-# Полный backup filer метаданных
+###Полный backup filer метаданных
 weed backup -server=filer-1:8888 -dir=/backup/seaweedfs/$(date +%Y%m%d)
 
-# Инкрементальный backup
+###Инкрементальный backup
 weed backup -server=filer-1:8888 -dir=/backup/seaweedfs/incremental -since=$(date -d "1 day ago" +%s)
 Volume data backup
 bash
-# Резервное копирование томов через rsync
+###Резервное копирование томов через rsync
 rsync -av /data/seaweedfs/volumes/ backup-server:/backup/seaweedfs/volumes/
 
-# Или использование LVM snapshots
+###Или использование LVM snapshots
 lvcreate -L 10G -s -n seaweedfs-snapshot /dev/vg0/seaweedfs-volumes
 Восстановление из backup
 bash
-# Восстановление filer метаданных
+###Восстановление filer метаданных
 weed restore -server=filer-1:8888 -dir=/backup/seaweedfs/20240101
 
-# Восстановление volume данных
+###Восстановление volume данных
 rsync -av backup-server:/backup/seaweedfs/volumes/ /data/seaweedfs/volumes/
 Replication как backup стратегия
 bash
-# Настройка cross-DC репликации
+###Настройка cross-DC репликации
 -volume -ip=volume-dc1-1 -dataCenter=dc1
 -volume -ip=volume-dc2-1 -dataCenter=dc2
 
-# Создание томов с cross-DC репликацией
+###Создание томов с cross-DC репликацией
 weed shell -master=master-1:9333 "volume.create -replication=100"
 Оптимизация производительности
 Оптимизация Volume серверов
 bash
-# Параметры запуска volume сервера
+###Параметры запуска volume сервера
 ```
 -volume \
   -compactionMBps=200 \          # Ограничение скорости компрессии
@@ -588,7 +588,7 @@ bash
 ```
 Оптимизация Filer
 bash
-# Параметры filer для высокой нагрузки
+###Параметры filer для высокой нагрузки
 ```
 -filer \
   -concurrentWalSize=1000 \      # Размер WAL
@@ -599,17 +599,17 @@ bash
 ```
 Системные оптимизации
 bash
-# Увеличение лимитов ядра
+###Увеличение лимитов ядра
 echo 'fs.file-max = 1000000' >> /etc/sysctl.conf
 echo 'net.core.somaxconn = 65536' >> /etc/sysctl.conf
 echo 'vm.swappiness = 1' >> /etc/sysctl.conf
 
-# Оптимизация XFS
+###Оптимизация XFS
 mkfs.xfs -f -i size=512 /dev/sdb1
 mount -o noatime,nodiratime,logbufs=8,logbsize=256k /dev/sdb1 /data/volumes
 Оптимизация сети
 bash
-# Настройка TCP для 10G сетей
+###Настройка TCP для 10G сетей
 echo 'net.core.rmem_max = 134217728' >> /etc/sysctl.conf
 echo 'net.core.wmem_max = 134217728' >> /etc/sysctl.conf
 echo 'net.ipv4.tcp_rmem = 4096 87380 67108864' >> /etc/sysctl.conf
@@ -619,10 +619,10 @@ Troubleshooting
 Проблема: Master не может выбрать лидера
 
 bash
-# Проверка RAFT статуса
+###Проверка RAFT статуса
 curl http://master-1:9333/cluster/raft?pretty=y
 
-# Решение: перезапуск master серверов
+###Решение: перезапуск master серверов
 sudo systemctl restart seaweedfs-master
 Проблема: Volume серверы не регистрируются
 
@@ -643,14 +643,14 @@ iostat -x 1
 # Проверка сети
 iperf3 -c volume-server-1
 ```
-# Решение: оптимизация компрессии и проверка дисков
+###Решение: оптимизация компрессии и проверка дисков
 Проблема: Filer не отвечает
 
 ```bash
 # Проверка базы данных filer
 weed shell -filer=filer-1:8888 "fs.du /"
 ```
-# Решение: проверка подключения к master и объема памяти
+###Решение: проверка подключения к master и объема памяти
 Полезные команды диагностики
 ```bash
 # Статус кластера
@@ -680,7 +680,7 @@ sudo journalctl -u seaweedfs-master -f
 sudo journalctl -u seaweedfs-volume -f  
 sudo journalctl -u seaweedfs-filer -f
 ```
-## Production рекомендации
+####Production рекомендации
 Архитектурные рекомендации
 Всегда используйте нечетное количество master серверов (3, 5, 7)
 
