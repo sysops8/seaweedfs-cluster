@@ -1485,3 +1485,1751 @@ listen stats
 ## Мониторинг и алертинг
 
 ### Prometheus конфигурация
+
+Создайте `/etc/prometheus/prometheus.yml`:
+
+```yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'seaweedfs-production'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Rule files
+rule_files:
+  - '/etc/prometheus/rules/seaweedfs_alerts.yml'
+
+# Scrape configurations
+scrape_configs:
+  # Master servers
+  - job_name: 'seaweedfs-master'
+    static_configs:
+      - targets:
+          - 'master-1:19333'
+          - 'master-2:19333'
+          - 'master-3:19333'
+        labels:
+          component: 'master'
+          datacenter: 'dc1'
+
+  # Volume servers
+  - job_name: 'seaweedfs-volume'
+    static_configs:
+      - targets:
+          - 'volume-1-1:18080'
+          - 'volume-1-2:18080'
+          - 'volume-1-3:18080'
+        labels:
+          component: 'volume'
+          rack: 'rack-1'
+          datacenter: 'dc1'
+      - targets:
+          - 'volume-2-1:18080'
+          - 'volume-2-2:18080'
+          - 'volume-2-3:18080'
+        labels:
+          component: 'volume'
+          rack: 'rack-2'
+          datacenter: 'dc1'
+      - targets:
+          - 'volume-3-1:18080'
+          - 'volume-3-2:18080'
+          - 'volume-3-3:18080'
+        labels:
+          component: 'volume'
+          rack: 'rack-3'
+          datacenter: 'dc1'
+
+  # Filer servers
+  - job_name: 'seaweedfs-filer'
+    static_configs:
+      - targets:
+          - 'filer-1:18888'
+          - 'filer-2:18888'
+          - 'filer-3:18888'
+        labels:
+          component: 'filer'
+          datacenter: 'dc1'
+
+  # Node exporters
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets:
+          - 'master-1:9100'
+          - 'master-2:9100'
+          - 'master-3:9100'
+          - 'volume-1-1:9100'
+          - 'volume-2-1:9100'
+          - 'volume-3-1:9100'
+          - 'filer-1:9100'
+          - 'filer-2:9100'
+          - 'filer-3:9100'
+```
+
+### Alert Rules для SeaweedFS
+
+Создайте `/etc/prometheus/rules/seaweedfs_alerts.yml`:
+
+```yaml
+groups:
+  - name: seaweedfs_master
+    interval: 30s
+    rules:
+      # Master не доступен
+      - alert: MasterServerDown
+        expr: up{job="seaweedfs-master"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: master
+        annotations:
+          summary: "Master server {{ $labels.instance }} is down"
+          description: "Master server {{ $labels.instance }} has been down for more than 2 minutes."
+
+      # Нет лидера в кластере
+      - alert: MasterNoLeader
+        expr: sum(weed_master_is_leader) == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: master
+        annotations:
+          summary: "No master leader elected"
+          description: "SeaweedFS cluster has no master leader for more than 1 minute."
+
+      # Высокая задержка на master
+      - alert: MasterHighLatency
+        expr: histogram_quantile(0.99, rate(weed_master_request_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: master
+        annotations:
+          summary: "High latency on master {{ $labels.instance }}"
+          description: "99th percentile latency is {{ $value }}s on {{ $labels.instance }}"
+
+  - name: seaweedfs_volume
+    interval: 30s
+    rules:
+      # Volume сервер не доступен
+      - alert: VolumeServerDown
+        expr: up{job="seaweedfs-volume"} == 0
+        for: 3m
+        labels:
+          severity: warning
+          component: volume
+        annotations:
+          summary: "Volume server {{ $labels.instance }} is down"
+          description: "Volume server {{ $labels.instance }} in rack {{ $labels.rack }} has been down for more than 3 minutes."
+
+      # Недостаточно свободного места
+      - alert: VolumeServerDiskSpaceLow
+        expr: (weed_volume_total_disk_size - weed_volume_used_disk_size) / weed_volume_total_disk_size * 100 < 10
+        for: 5m
+        labels:
+          severity: warning
+          component: volume
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Volume server {{ $labels.instance }} has less than 10% free disk space ({{ $value }}% remaining)."
+
+      # Критически мало свободного места
+      - alert: VolumeServerDiskSpaceCritical
+        expr: (weed_volume_total_disk_size - weed_volume_used_disk_size) / weed_volume_total_disk_size * 100 < 5
+        for: 2m
+        labels:
+          severity: critical
+          component: volume
+        annotations:
+          summary: "Critical disk space on {{ $labels.instance }}"
+          description: "Volume server {{ $labels.instance }} has less than 5% free disk space ({{ $value }}% remaining). Immediate action required!"
+
+      # Высокое количество ошибок чтения
+      - alert: VolumeHighReadErrors
+        expr: rate(weed_volume_read_errors_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: volume
+        annotations:
+          summary: "High read error rate on {{ $labels.instance }}"
+          description: "Volume server {{ $labels.instance }} has {{ $value }} read errors per second."
+
+      # Высокое количество ошибок записи
+      - alert: VolumeHighWriteErrors
+        expr: rate(weed_volume_write_errors_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: critical
+          component: volume
+        annotations:
+          summary: "High write error rate on {{ $labels.instance }}"
+          description: "Volume server {{ $labels.instance }} has {{ $value }} write errors per second."
+
+      # Недостаточно volumes
+      - alert: LowAvailableVolumes
+        expr: weed_master_volume_free_count < 10
+        for: 5m
+        labels:
+          severity: warning
+          component: volume
+        annotations:
+          summary: "Low number of available volumes"
+          description: "Only {{ $value }} free volumes available in the cluster. Consider adding more volume capacity."
+
+  - name: seaweedfs_filer
+    interval: 30s
+    rules:
+      # Filer не доступен
+      - alert: FilerServerDown
+        expr: up{job="seaweedfs-filer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: filer
+        annotations:
+          summary: "Filer server {{ $labels.instance }} is down"
+          description: "Filer server {{ $labels.instance }} has been down for more than 2 minutes."
+
+      # Высокая задержка на filer
+      - alert: FilerHighLatency
+        expr: histogram_quantile(0.99, rate(weed_filer_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          component: filer
+        annotations:
+          summary: "High latency on filer {{ $labels.instance }}"
+          description: "99th percentile latency is {{ $value }}s on {{ $labels.instance }}"
+
+      # Проблемы с базой данных метаданных
+      - alert: FilerDatabaseErrors
+        expr: rate(weed_filer_store_errors_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: critical
+          component: filer
+        annotations:
+          summary: "Database errors on filer {{ $labels.instance }}"
+          description: "Filer {{ $labels.instance }} experiencing {{ $value }} database errors per second."
+
+  - name: seaweedfs_replication
+    interval: 60s
+    rules:
+      # Проблемы с репликацией
+      - alert: ReplicationLag
+        expr: weed_volume_replication_lag_seconds > 300
+        for: 10m
+        labels:
+          severity: warning
+          component: replication
+        annotations:
+          summary: "Replication lag detected"
+          description: "Replication lag is {{ $value }}s on volume {{ $labels.volume_id }}. Check volume server health."
+
+      # Потеря реплик
+      - alert: MissingReplicas
+        expr: weed_volume_replica_count < weed_volume_expected_replica_count
+        for: 5m
+        labels:
+          severity: critical
+          component: replication
+        annotations:
+          summary: "Missing replicas for volume {{ $labels.volume_id }}"
+          description: "Volume {{ $labels.volume_id }} has {{ $value }} replicas instead of expected {{ $labels.expected }}."
+```
+
+### Grafana Dashboard
+
+Создайте dashboard с следующими панелями:
+
+**Импортируйте готовый dashboard:**
+
+```bash
+# Скачайте dashboard JSON
+curl -o seaweedfs-dashboard.json https://raw.githubusercontent.com/seaweedfs/seaweedfs/master/docker/grafana-dashboard.json
+
+# Импортируйте через Grafana UI или API
+curl -X POST http://admin:admin@grafana:3000/api/dashboards/db \
+  -H "Content-Type: application/json" \
+  -d @seaweedfs-dashboard.json
+```
+
+**Основные метрики для мониторинга:**
+
+| Метрика | Описание | Threshold |
+|---------|----------|-----------|
+| `up{job="seaweedfs-master"}` | Доступность master серверов | = 1 |
+| `weed_master_is_leader` | Наличие лидера | sum() > 0 |
+| `weed_master_volume_free_count` | Количество свободных volumes | > 10 |
+| `weed_volume_total_disk_size` | Общий объем дисков | - |
+| `weed_volume_used_disk_size` | Использованный объем | < 90% |
+| `rate(weed_volume_request_total[5m])` | RPS на volume серверах | - |
+| `weed_volume_replica_count` | Количество реплик | = expected |
+| `rate(weed_filer_request_total[5m])` | RPS на filer серверах | - |
+
+### Node Exporter для системных метрик
+
+**Установка на каждом сервере:**
+
+```bash
+# Скачивание
+cd /tmp
+wget https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz
+tar xvfz node_exporter-*.tar.gz
+sudo cp node_exporter-*/node_exporter /usr/local/bin/
+sudo chown root:root /usr/local/bin/node_exporter
+
+# Создание systemd service
+sudo tee /etc/systemd/system/node_exporter.service > /dev/null <<EOF
+[Unit]
+Description=Node Exporter
+After=network.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+Type=simple
+ExecStart=/usr/local/bin/node_exporter \
+  --collector.filesystem.mount-points-exclude='^/(sys|proc|dev|host|etc)($$|/)' \
+  --collector.diskstats.ignored-devices='^(ram|loop|fd|(h|s|v|xv)d[a-z]|nvme\\d+n\\d+p)\\d+$$'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Создание пользователя
+sudo useradd -r -s /bin/false node_exporter
+
+# Запуск
+sudo systemctl daemon-reload
+sudo systemctl enable node_exporter
+sudo systemctl start node_exporter
+```
+
+### Alertmanager конфигурация
+
+Создайте `/etc/alertmanager/alertmanager.yml`:
+
+```yaml
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: 'smtp.example.com:587'
+  smtp_from: 'alertmanager@example.com'
+  smtp_auth_username: 'alertmanager@example.com'
+  smtp_auth_password: 'password'
+
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: 'default'
+  
+  routes:
+    # Critical alerts - немедленная отправка
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 0s
+      repeat_interval: 4h
+    
+    # Warning alerts - группировка
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      group_wait: 30s
+      repeat_interval: 12h
+
+receivers:
+  - name: 'default'
+    email_configs:
+      - to: 'team@example.com'
+        send_resolved: true
+
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'oncall@example.com'
+        send_resolved: true
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#critical-alerts'
+        title: 'SeaweedFS Critical Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}\n{{ .Annotations.description }}\n{{ end }}'
+    pagerduty_configs:
+      - service_key: 'YOUR_PAGERDUTY_KEY'
+
+  - name: 'warning-alerts'
+    email_configs:
+      - to: 'team@example.com'
+        send_resolved: true
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#seaweedfs-alerts'
+        title: 'SeaweedFS Warning'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}'
+
+inhibit_rules:
+  # Не отправлять warning если есть critical
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
+```
+
+### Логирование
+
+**Централизованное логирование с Loki:**
+
+```bash
+# Установка Promtail на каждом сервере
+wget https://github.com/grafana/loki/releases/download/v2.9.0/promtail-linux-amd64.zip
+unzip promtail-linux-amd64.zip
+sudo mv promtail-linux-amd64 /usr/local/bin/promtail
+sudo chmod +x /usr/local/bin/promtail
+```
+
+**Конфигурация Promtail (`/etc/promtail/config.yml`):**
+
+```yaml
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /var/log/promtail/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: seaweedfs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: seaweedfs
+          host: ${HOSTNAME}
+          __path__: /var/log/seaweedfs/*.log
+    
+    pipeline_stages:
+      - match:
+          selector: '{job="seaweedfs"}'
+          stages:
+            - regex:
+                expression: '^(?P<timestamp>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) \[(?P<level>\w+)\] (?P<message>.*)$'
+            - labels:
+                level:
+            - timestamp:
+                source: timestamp
+                format: '2006/01/02 15:04:05'
+
+  - job_name: journal
+    journal:
+      max_age: 12h
+      labels:
+        job: systemd-journal
+        host: ${HOSTNAME}
+    relabel_configs:
+      - source_labels: ['__journal__systemd_unit']
+        target_label: 'unit'
+      - source_labels: ['__journal__hostname']
+        target_label: 'host'
+```
+
+### Health Check скрипты
+
+**Полная проверка здоровья кластера (`/usr/local/bin/check-cluster-health.sh`):**
+
+```bash
+#!/bin/bash
+
+set -euo pipefail
+
+MASTER_HOST="${MASTER_HOST:-master-1:9333}"
+ERRORS=0
+
+echo "=== SeaweedFS Cluster Health Check ==="
+echo "Date: $(date)"
+echo ""
+
+# Проверка Master серверов
+echo "Checking Master servers..."
+LEADER=$(curl -sf "http://${MASTER_HOST}/cluster/status" | jq -r '.Leader' || echo "")
+if [ -z "$LEADER" ]; then
+    echo "❌ ERROR: No master leader found"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "✓ Master leader: $LEADER"
+fi
+
+PEERS=$(curl -sf "http://${MASTER_HOST}/cluster/status" | jq -r '.Peers[]' || echo "")
+PEER_COUNT=$(echo "$PEERS" | wc -l)
+if [ "$PEER_COUNT" -lt 3 ]; then
+    echo "❌ ERROR: Only $PEER_COUNT master peers found (expected 3+)"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "✓ Master peers: $PEER_COUNT"
+fi
+
+# Проверка Volume серверов
+echo ""
+echo "Checking Volume servers..."
+TOPOLOGY=$(curl -sf "http://${MASTER_HOST}/dir/status" | jq -r '.Topology')
+VOLUME_COUNT=$(echo "$TOPOLOGY" | jq -r '.DataCenters[].Racks[].DataNodes[] | .Volumes' | wc -l)
+if [ "$VOLUME_COUNT" -lt 1 ]; then
+    echo "❌ ERROR: No volume servers found"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "✓ Volume servers connected: $VOLUME_COUNT"
+fi
+
+FREE_VOLUMES=$(curl -sf "http://${MASTER_HOST}/dir/status" | jq -r '.Topology.Free')
+if [ "$FREE_VOLUMES" -lt 10 ]; then
+    echo "⚠️  WARNING: Low free volumes: $FREE_VOLUMES (threshold: 10)"
+else
+    echo "✓ Free volumes: $FREE_VOLUMES"
+fi
+
+# Проверка репликации
+echo ""
+echo "Checking replication..."
+MISSING_REPLICAS=$(curl -sf "http://${MASTER_HOST}/vol/status?collection=*" | \
+    jq -r '.Volumes[] | select(.ReplicaPlacement != .FileCount) | .Id' | wc -l)
+if [ "$MISSING_REPLICAS" -gt 0 ]; then
+    echo "❌ ERROR: $MISSING_REPLICAS volumes with replication issues"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "✓ All volumes properly replicated"
+fi
+
+# Проверка дискового пространства
+echo ""
+echo "Checking disk space..."
+USED_PERCENT=$(curl -sf "http://${MASTER_HOST}/dir/status" | \
+    jq -r '(.Topology.Max - .Topology.Free) / .Topology.Max * 100')
+if (( $(echo "$USED_PERCENT > 90" | bc -l) )); then
+    echo "❌ ERROR: Disk usage critical: ${USED_PERCENT}%"
+    ERRORS=$((ERRORS + 1))
+elif (( $(echo "$USED_PERCENT > 80" | bc -l) )); then
+    echo "⚠️  WARNING: Disk usage high: ${USED_PERCENT}%"
+else
+    echo "✓ Disk usage: ${USED_PERCENT}%"
+fi
+
+# Результат
+echo ""
+echo "======================================="
+if [ "$ERRORS" -eq 0 ]; then
+    echo "✓ Cluster health check PASSED"
+    exit 0
+else
+    echo "❌ Cluster health check FAILED with $ERRORS errors"
+    exit 1
+fi
+```
+
+```bash
+chmod +x /usr/local/bin/check-cluster-health.sh
+
+# Добавить в cron для периодической проверки
+echo "*/5 * * * * /usr/local/bin/check-cluster-health.sh >> /var/log/seaweedfs/health-check.log 2>&1" | sudo crontab -
+```
+
+---
+
+## Backup и восстановление
+
+### Стратегии резервного копирования
+
+**Три уровня backup:**
+
+1. **Метаданные Master серверов** — критичны для топологии кластера
+2. **Метаданные Filer (база данных)** — критичны для файловой структуры
+3. **Volume данные** — сами файлы (уже защищены репликацией)
+
+### Backup Master метаданных
+
+**Автоматический backup скрипт (`/usr/local/bin/backup-master.sh`):**
+
+```bash
+#!/bin/bash
+
+set -euo pipefail
+
+BACKUP_DIR="/backup/seaweedfs/master"
+MASTER_DATA_DIR="/data/seaweedfs/metadata"
+RETENTION_DAYS=30
+DATE=$(date +%Y%m%d_%H%M%S)
+
+# Создание директории backup
+mkdir -p "$BACKUP_DIR"
+
+# Backup метаданных
+echo "Creating master metadata backup..."
+tar -czf "$BACKUP_DIR/master-metadata-$DATE.tar.gz" \
+    -C "$(dirname $MASTER_DATA_DIR)" \
+    "$(basename $MASTER_DATA_DIR)"
+
+# Проверка backup
+if [ -f "$BACKUP_DIR/master-metadata-$DATE.tar.gz" ]; then
+    echo "✓ Backup created: master-metadata-$DATE.tar.gz"
+    
+    # Размер backup
+    SIZE=$(du -h "$BACKUP_DIR/master-metadata-$DATE.tar.gz" | cut -f1)
+    echo "Backup size: $SIZE"
+else
+    echo "❌ ERROR: Backup failed"
+    exit 1
+fi
+
+# Удаление старых backup
+echo "Cleaning old backups (older than $RETENTION_DAYS days)..."
+find "$BACKUP_DIR" -name "master-metadata-*.tar.gz" -mtime +$RETENTION_DAYS -delete
+
+# Список backup
+echo ""
+echo "Available backups:"
+ls -lh "$BACKUP_DIR"/master-metadata-*.tar.gz | tail -10
+
+# Отправка на удаленное хранилище (опционально)
+if [ -n "${REMOTE_BACKUP:-}" ]; then
+    echo "Uploading to remote storage..."
+    aws s3 cp "$BACKUP_DIR/master-metadata-$DATE.tar.gz" \
+        "s3://your-backup-bucket/seaweedfs/master/" \
+        --endpoint-url "$REMOTE_BACKUP"
+fi
+```
+
+**Настройка периодического backup:**
+
+```bash
+chmod +x /usr/local/bin/backup-master.sh
+
+# Добавить в crontab (ежедневно в 2 AM)
+echo "0 2 * * * /usr/local/bin/backup-master.sh >> /var/log/seaweedfs/backup-master.log 2>&1" | sudo crontab -
+```
+
+### Backup Filer метаданных (PostgreSQL)
+
+**Backup скрипт для PostgreSQL (`/usr/local/bin/backup-filer-db.sh`):**
+
+```bash
+#!/bin/bash
+
+set -euo pipefail
+
+BACKUP_DIR="/backup/seaweedfs/filer"
+DB_HOST="postgres-host"
+DB_NAME="seaweedfs"
+DB_USER="seaweedfs"
+DB_PASSWORD="secure_password_here"
+RETENTION_DAYS=30
+DATE=$(date +%Y%m%d_%H%M%S)
+
+# Создание директории
+mkdir -p "$BACKUP_DIR"
+
+# Backup базы данных
+echo "Creating filer database backup..."
+PGPASSWORD="$DB_PASSWORD" pg_dump \
+    -h "$DB_HOST" \
+    -U "$DB_USER" \
+    -d "$DB_NAME" \
+    -F c \
+    -f "$BACKUP_DIR/filer-db-$DATE.dump"
+
+# Проверка backup
+if [ -f "$BACKUP_DIR/filer-db-$DATE.dump" ]; then
+    echo "✓ Database backup created: filer-db-$DATE.dump"
+    
+    SIZE=$(du -h "$BACKUP_DIR/filer-db-$DATE.dump" | cut -f1)
+    echo "Backup size: $SIZE"
+    
+    # Сжатие
+    gzip "$BACKUP_DIR/filer-db-$DATE.dump"
+    echo "✓ Backup compressed: filer-db-$DATE.dump.gz"
+else
+    echo "❌ ERROR: Database backup failed"
+    exit 1
+fi
+
+# Удаление старых backup
+echo "Cleaning old backups..."
+find "$BACKUP_DIR" -name "filer-db-*.dump.gz" -mtime +$RETENTION_DAYS -delete
+
+# Список backup
+echo ""
+echo "Available backups:"
+ls -lh "$BACKUP_DIR"/filer-db-*.dump.gz | tail -10
+
+# Отправка на удаленное хранилище
+if [ -n "${REMOTE_BACKUP:-}" ]; then
+    echo "Uploading to remote storage..."
+    aws s3 cp "$BACKUP_DIR/filer-db-$DATE.dump.gz" \
+        "s3://your-backup-bucket/seaweedfs/filer/" \
+        --endpoint-url "$REMOTE_BACKUP"
+fi
+```
+
+```bash
+chmod +x /usr/local/bin/backup-filer-db.sh
+
+# Ежедневный backup в 3 AM
+echo "0 3 * * * /usr/local/bin/backup-filer-db.sh >> /var/log/seaweedfs/backup-filer.log 2>&1" | sudo crontab -
+```
+
+### Backup Volume данных
+
+**Подходы к backup volumes:**
+
+**1. Snapshot-based backup (рекомендуется для production):**
+
+```bash
+#!/bin/bash
+# Создание snapshot для каждого volume диска
+
+VOLUME_DIRS=(
+    "/data/disk1/seaweedfs/volumes"
+    "/data/disk2/seaweedfs/volumes"
+    "/data/disk3/seaweedfs/volumes"
+    "/data/disk4/seaweedfs/volumes"
+)
+
+for DIR in "${VOLUME_DIRS[@]}"; do
+    DISK=$(df "$DIR" | tail -1 | awk '{print $1}')
+    SNAPSHOT_NAME="snapshot-$(date +%Y%m%d_%H%M%S)"
+    
+    echo "Creating snapshot for $DISK..."
+    # Для LVM
+    lvcreate -L 10G -s -n "$SNAPSHOT_NAME" "$DISK"
+    
+    # Монтирование snapshot
+    mkdir -p "/mnt/snapshots/$SNAPSHOT_NAME"
+    mount "/dev/vg0/$SNAPSHOT_NAME" "/mnt/snapshots/$SNAPSHOT_NAME"
+    
+    # Backup snapshot
+    rsync -a "/mnt/snapshots/$SNAPSHOT_NAME/" "/backup/volumes/$SNAPSHOT_NAME/"
+    
+    # Очистка
+    umount "/mnt/snapshots/$SNAPSHOT_NAME"
+    lvremove -f "/dev/vg0/$SNAPSHOT_NAME"
+done
+```
+
+**2. Incremental backup с rsync:**
+
+```bash
+#!/bin/bash
+# Инкрементальный backup volumes
+
+BACKUP_BASE="/backup/seaweedfs/volumes"
+VOLUME_DIRS="/data/disk*/seaweedfs/volumes"
+DATE=$(date +%Y%m%d)
+
+for SOURCE in $VOLUME_DIRS; do
+    DISK_NAME=$(basename $(dirname $(dirname "$SOURCE")))
+    DEST="$BACKUP_BASE/$DISK_NAME"
+    
+    echo "Backing up $SOURCE to $DEST..."
+    
+    rsync -a --delete \
+        --link-dest="$DEST/current" \
+        "$SOURCE/" \
+        "$DEST/$DATE/"
+    
+    # Обновление симлинка на последний backup
+    rm -f "$DEST/current"
+    ln -s "$DATE" "$DEST/current"
+done
+```
+
+**3. Репликация в другой датацентр (best practice):**
+
+```bash
+# Настройка cross-DC репликации уже защищает данные
+# Используйте репликацию 100 (cross-DC) для critical данных
+weed shell -master=master-1:9333 << EOF
+volume.create -replication=100 -collection=critical-data
+EOF
+```
+
+### Восстановление Master сервера
+
+**Восстановление из backup:**
+
+```bash
+#!/bin/bash
+# restore-master.sh
+
+BACKUP_FILE="$1"
+MASTER_DATA_DIR="/data/seaweedfs/metadata"
+
+if [ -z "$BACKUP_FILE" ]; then
+    echo "Usage: $0 <backup-file.tar.gz>"
+    exit 1
+fi
+
+# Остановка сервиса
+echo "Stopping master service..."
+sudo systemctl stop seaweedfs-master
+
+# Backup текущих данных (на всякий случай)
+echo "Creating safety backup..."
+sudo mv "$MASTER_DATA_DIR" "${MASTER_DATA_DIR}.backup-$(date +%Y%m%d_%H%M%S)"
+
+# Восстановление из backup
+echo "Restoring from $BACKUP_FILE..."
+sudo mkdir -p "$(dirname $MASTER_DATA_DIR)"
+sudo tar -xzf "$BACKUP_FILE" -C "$(dirname $MASTER_DATA_DIR)"
+
+# Проверка прав доступа
+sudo chown -R seaweedfs:seaweedfs "$MASTER_DATA_DIR"
+sudo chmod 750 "$MASTER_DATA_DIR"
+
+# Запуск сервиса
+echo "Starting master service..."
+sudo systemctl start seaweedfs-master
+
+# Проверка статуса
+sleep 5
+if sudo systemctl is-active --quiet seaweedfs-master; then
+    echo "✓ Master service restored successfully"
+    
+    # Проверка кластера
+    curl -sf "http://localhost:9333/cluster/status?pretty=y"
+else
+    echo "❌ ERROR: Master service failed to start"
+    echo "Checking logs..."
+    sudo journalctl -u seaweedfs-master -n 50
+    exit 1
+fi
+```
+
+### Восстановление Filer метаданных
+
+**Восстановление PostgreSQL базы данных:**
+
+```bash
+#!/bin/bash
+# restore-filer-db.sh
+
+BACKUP_FILE="$1"
+DB_HOST="postgres-host"
+DB_NAME="seaweedfs"
+DB_USER="seaweedfs"
+DB_PASSWORD="secure_password_here"
+
+if [ -z "$BACKUP_FILE" ]; then
+    echo "Usage: $0 <backup-file.dump.gz>"
+    exit 1
+fi
+
+# Остановка filer сервисов
+echo "Stopping filer services..."
+sudo systemctl stop seaweedfs-filer
+
+# Распаковка backup
+echo "Decompressing backup..."
+gunzip -c "$BACKUP_FILE" > /tmp/filer-restore.dump
+
+# Создание новой базы данных
+echo "Recreating database..."
+PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -U postgres << EOF
+DROP DATABASE IF EXISTS ${DB_NAME}_old;
+ALTER DATABASE $DB_NAME RENAME TO ${DB_NAME}_old;
+CREATE DATABASE $DB_NAME;
+GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
+EOF
+
+# Восстановление данных
+echo "Restoring database..."
+PGPASSWORD="$DB_PASSWORD" pg_restore \
+    -h "$DB_HOST" \
+    -U "$DB_USER" \
+    -d "$DB_NAME" \
+    -v \
+    /tmp/filer-restore.dump
+
+# Проверка восстановления
+RECORD_COUNT=$(PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -t -c "SELECT COUNT(*) FROM filemeta;")
+echo "Records restored: $RECORD_COUNT"
+
+# Очистка
+rm /tmp/filer-restore.dump
+
+# Запуск filer сервисов
+echo "Starting filer services..."
+sudo systemctl start seaweedfs-filer
+
+# Проверка
+sleep 5
+if sudo systemctl is-active --quiet seaweedfs-filer; then
+    echo "✓ Filer database restored successfully"
+else
+    echo "❌ ERROR: Filer service failed to start"
+    sudo journalctl -u seaweedfs-filer -n 50
+    exit 1
+fi
+```
+
+### Disaster Recovery Plan
+
+**Сценарий 1: Полная потеря одного master сервера**
+
+```bash
+# 1. Удалить мертвый сервер из peers на оставшихся master
+weed shell -master=master-2:9333 << EOF
+cluster.raft.remove -id=master-1:9333
+EOF
+
+# 2. Поднять новый master сервер
+# 3. Добавить в кластер
+weed shell -master=master-2:9333 << EOF
+cluster.raft.add -id=master-1-new:9333
+EOF
+```
+
+**Сценарий 2: Потеря всего master кластера**
+
+```bash
+# 1. Восстановить последний backup на 3 новых серверах
+for HOST in master-1 master-2 master-3; do
+    scp /backup/master-metadata-latest.tar.gz $HOST:/tmp/
+    ssh $HOST "sudo /usr/local/bin/restore-master.sh /tmp/master-metadata-latest.tar.gz"
+done
+
+# 2. Запустить master кластер с правильными peers
+# 3. Проверить topology
+curl http://master-1:9333/dir/status?pretty=y
+```
+
+**Сценарий 3: Потеря базы данных Filer**
+
+```bash
+# 1. Восстановить последний backup PostgreSQL
+/usr/local/bin/restore-filer-db.sh /backup/filer-db-latest.dump.gz
+
+# 2. Перезапустить все filer серверы
+for HOST in filer-1 filer-2 filer-3; do
+    ssh $HOST "sudo systemctl restart seaweedfs-filer"
+done
+
+# 3. Проверить доступность
+curl http://filer-1:8888/?pretty=y
+```
+
+### Тестирование backup
+
+**Регулярное тестирование восстановления (ежемесячно):**
+
+```bash
+#!/bin/bash
+# test-restore.sh
+
+TEST_DATE=$(date +%Y%m%d)
+TEST_DIR="/tmp/restore-test-$TEST_DATE"
+
+echo "=== Testing Backup Restore ==="
+echo "Date: $(date)"
+
+# 1. Тест восстановления master
+echo ""
+echo "Testing master backup restore..."
+mkdir -p "$TEST_DIR/master"
+tar -xzf /backup/seaweedfs/master/master-metadata-latest.tar.gz -C "$TEST_DIR/master"
+if [ $? -eq 0 ]; then
+    echo "✓ Master backup is valid"
+else
+    echo "❌ Master backup is corrupted!"
+    exit 1
+fi
+
+# 2. Тест восстановления filer DB
+echo ""
+echo "Testing filer database backup restore..."
+gunzip -c /backup/seaweedfs/filer/filer-db-latest.dump.gz > "$TEST_DIR/filer-test.dump"
+if [ $? -eq 0 ]; then
+    echo "✓ Filer backup is valid"
+else
+    echo "❌ Filer backup is corrupted!"
+    exit 1
+fi
+
+# 3. Проверка целостности
+echo ""
+echo "Checking backup integrity..."
+MASTER_SIZE=$(du -sh /backup/seaweedfs/master/master-metadata-latest.tar.gz | cut -f1)
+FILER_SIZE=$(du -sh /backup/seaweedfs/filer/filer-db-latest.dump.gz | cut -f1)
+
+echo "Master backup size: $MASTER_SIZE"
+echo "Filer backup size: $FILER_SIZE"
+
+# Очистка
+rm -rf "$TEST_DIR"
+
+echo ""
+echo "✓ All backup tests passed!"
+```
+
+```bash
+chmod +x /usr/local/bin/test-restore.sh
+
+# Ежемесячное тестирование
+echo "0 4 1 * * /usr/local/bin/test-restore.sh >> /var/log/seaweedfs/restore-test.log 2>&1" | sudo crontab -
+```
+
+---
+
+## Оптимизация производительности
+
+### Настройка производительности Volume серверов
+
+**Оптимизация файловой системы:**
+
+```bash
+# XFS mount options для максимальной производительности
+# В /etc/fstab:
+UUID=xxx /data/disk1 xfs noatime,nodiratime,logbufs=8,logbsize=256k,largeio,inode64,swalloc 0 2
+
+# Remount с новыми параметрами
+sudo mount -o remount /data/disk1
+```
+
+**Настройка I/O scheduler:**
+
+```bash
+# Для SSD используйте none или mq-deadline
+echo "none" | sudo tee /sys/block/sdb/queue/scheduler
+
+# Для HDD используйте mq-deadline
+echo "mq-deadline" | sudo tee /sys/block/sdc/queue/scheduler
+
+# Постоянная настройка через udev rule
+cat <<EOF | sudo tee /etc/udev/rules.d/60-schedulers.rules
+# SSD
+ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="none"
+# HDD
+ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="mq-deadline"
+EOF
+```
+
+**Kernel parameters для высокой нагрузки:**
+
+```bash
+# Добавить в /etc/sysctl.conf
+cat <<EOF | sudo tee -a /etc/sysctl.conf
+
+# Network tuning
+net.core.somaxconn = 65535
+net.ipv4.tcp_max_syn_backlog = 8192
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 15
+net.ipv4.ip_local_port_range = 1024 65535
+
+# File system tuning
+fs.file-max = 2097152
+fs.inotify.max_user_watches = 524288
+fs.aio-max-nr = 1048576
+
+# Memory management
+vm.swappiness = 10
+vm.dirty_ratio = 15
+vm.dirty_background_ratio = 5
+vm.vfs_cache_pressure = 50
+
+# Increase TCP buffer sizes
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+EOF
+
+# Применить настройки
+sudo sysctl -p
+```
+
+**Limits для seaweedfs пользователя:**
+
+```bash
+# В /etc/security/limits.conf
+cat <<EOF | sudo tee -a /etc/security/limits.conf
+seaweedfs soft nofile 65536
+seaweedfs hard nofile 65536
+seaweedfs soft nproc 32768
+seaweedfs hard nproc 32768
+EOF
+```
+
+### Оптимизация Volume конфигурации
+
+**Подбор оптимального количества volumes:**
+
+```
+Общая формула:
+volumes_per_disk = disk_size_gb / volume_size_mb
+
+Пример для 4TB диска:
+4000 GB / 30 GB = ~133 volumes
+Рекомендуется: 100-120 volumes (с запасом)
+
+Для параметра -max:
+-max=25 означает максимум 25 volumes на одну -dir
+Если у вас 4 диска: 4 × 25 = 100 volumes total
+```
+
+**Оптимальные параметры Volume:**
+
+```ini
+# В systemd service
+ExecStart=/usr/local/bin/weed volume \
+  # Размер volume файла (рекомендуется 30GB)
+  -volumeSizeLimitMB=30000 \
+  
+  # Максимум volumes на директорию
+  -max=25 \
+  
+  # Тип индекса (leveldb быстрее)
+  -index=leveldb \
+  
+  # Ограничение скорости компрессии (MB/s)
+  -compactionMBps=100 \
+  
+  # Минимальный процент свободного места
+  -minFreeSpacePercent=5 \
+  
+  # Чтение напрямую с диска (для больших файлов)
+  -readMode=os \
+  
+  # Количество потоков для компрессии
+  -parallelUpload=8 \
+  
+  # Timeout для репликации
+  -replicationTimeout=90s
+```
+
+### Оптимизация Filer производительности
+
+**Настройка PostgreSQL для Filer:**
+
+```sql
+-- В postgresql.conf
+
+-- Memory settings (для 16GB RAM сервера)
+shared_buffers = 4GB
+effective_cache_size = 12GB
+maintenance_work_mem = 1GB
+work_mem = 64MB
+
+-- Checkpoint settings
+checkpoint_completion_target = 0.9
+wal_buffers = 16MB
+default_statistics_target = 100
+
+-- Query planner
+random_page_cost = 1.1  -- Для SSD
+effective_io_concurrency = 200
+
+-- Write performance
+synchronous_commit = off  -- Осторожно: может привести к потере данных
+wal_writer_delay = 200ms
+commit_delay = 100
+
+-- Autovacuum tuning
+autovacuum_vacuum_scale_factor = 0.05
+autovacuum_analyze_scale_factor = 0.02
+autovacuum_vacuum_cost_delay = 2ms
+
+-- Connections
+max_connections = 200
+```
+
+**Индексы для оптимизации запросов:**
+
+```sql
+-- Дополнительные индексы для быстрого поиска
+CREATE INDEX CONCURRENTLY idx_filemeta_directory_name ON filemeta(directory, name);
+CREATE INDEX CONCURRENTLY idx_filemeta_meta_gin ON filemeta USING gin(meta jsonb_path_ops);
+
+-- Анализ таблицы
+ANALYZE filemeta;
+
+-- Проверка использования индексов
+SELECT schemaname, tablename, indexname, idx_scan, idx_tup_read, idx_tup_fetch
+FROM pg_stat_user_indexes
+WHERE schemaname = 'public'
+ORDER BY idx_scan DESC;
+```
+
+**Connection pooling с PgBouncer:**
+
+```ini
+# /etc/pgbouncer/pgbouncer.ini
+
+[databases]
+seaweedfs = host=postgres-host port=5432 dbname=seaweedfs
+
+[pgbouncer]
+listen_addr = *
+listen_port = 6432
+auth_type = md5
+auth_file = /etc/pgbouncer/userlist.txt
+
+# Pool settings
+pool_mode = transaction
+max_client_conn = 500
+default_pool_size = 25
+reserve_pool_size = 5
+reserve_pool_timeout = 3
+
+# Timeouts
+server_idle_timeout = 600
+server_connect_timeout = 15
+```
+
+### Кэширование
+
+**Настройка Redis для кэширования метаданных:**
+
+```toml
+# В filer.toml добавить:
+
+[redis_cluster2]
+enabled = true
+addresses = [
+  "redis-1:6379",
+  "redis-2:6379",
+  "redis-3:6379"
+]
+password = ""
+readOnly = false
+
+# Кэширование на 1 час
+[filer.options]
+cache_capacity_mb = 1024
+cache_to_filer_timeout_ms = 100
+```
+
+**Varnish для кэширования S3 запросов:**
+
+```vcl
+# /etc/varnish/default.vcl
+
+vcl 4.0;
+
+backend default {
+    .host = "filer-lb";
+    .port = "8333";
+    .connect_timeout = 5s;
+    .first_byte_timeout = 60s;
+    .between_bytes_timeout = 10s;
+}
+
+sub vcl_recv {
+    # Кэшировать GET и HEAD запросы
+    if (req.method != "GET" && req.method != "HEAD") {
+        return (pass);
+    }
+    
+    # Не кэшировать bucket operations
+    if (req.url ~ "^/\?") {
+        return (pass);
+    }
+    
+    return (hash);
+}
+
+sub vcl_backend_response {
+    # Кэшировать на 1 час
+    if (bereq.url ~ "\.(jpg|jpeg|png|gif|ico|svg|mp4|pdf|zip)$") {
+        set beresp.ttl = 1h;
+        set beresp.grace = 6h;
+    }
+    
+    # Не кэшировать errors
+    if (beresp.status >= 400) {
+        set beresp.ttl = 0s;
+    }
+}
+
+sub vcl_deliver {
+    # Добавить заголовок с информацией о кэше
+    if (obj.hits > 0) {
+        set resp.http.X-Cache = "HIT";
+        set resp.http.X-Cache-Hits = obj.hits;
+    } else {
+        set resp.http.X-Cache = "MISS";
+    }
+}
+```
+
+### Benchmark и тестирование производительности
+
+**Benchmark script для загрузки файлов:**
+
+```bash
+#!/bin/bash
+# benchmark-upload.sh
+
+FILER_HOST="filer-1:8888"
+NUM_FILES=10000
+FILE_SIZE_KB=100
+THREADS=50
+
+echo "=== SeaweedFS Upload Benchmark ==="
+echo "Files: $NUM_FILES"
+echo "Size: ${FILE_SIZE_KB}KB"
+echo "Threads: $THREADS"
+echo ""
+
+# Создание тестового файла
+dd if=/dev/urandom of=/tmp/test-file.bin bs=1024 count=$FILE_SIZE_KB 2>/dev/null
+
+START_TIME=$(date +%s)
+
+# Параллельная загрузка
+seq 1 $NUM_FILES | xargs -P $THREADS -I {} bash -c "
+    curl -sf -F 'file=@/tmp/test-file.bin' \
+    'http://$FILER_HOST/benchmark/file-{}' > /dev/null
+"
+
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+
+# Расчет метрик
+FILES_PER_SEC=$((NUM_FILES / DURATION))
+MB_PER_SEC=$(((NUM_FILES * FILE_SIZE_KB / 1024) / DURATION))
+
+echo "Duration: ${DURATION}s"
+echo "Files/sec: $FILES_PER_SEC"
+echo "MB/sec: $MB_PER_SEC"
+
+# Очистка
+rm /tmp/test-file.bin
+```
+
+**Benchmark для чтения:**
+
+```bash
+#!/bin/bash
+# benchmark-download.sh
+
+FILER_HOST="filer-1:8888"
+NUM_REQUESTS=10000
+THREADS=100
+
+echo "=== SeaweedFS Download Benchmark ==="
+
+START_TIME=$(date +%s)
+
+seq 1 $NUM_REQUESTS | xargs -P $THREADS -I {} bash -c "
+    FILE_NUM=\$((\$RANDOM % $NUM_FILES + 1))
+    curl -sf 'http://$FILER_HOST/benchmark/file-\$FILE_NUM' > /dev/null
+"
+
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+
+REQUESTS_PER_SEC=$((NUM_REQUESTS / DURATION))
+
+echo "Duration: ${DURATION}s"
+echo "Requests/sec: $REQUESTS_PER_SEC"
+```
+
+**Load testing с wrk:**
+
+```bash
+# Установка wrk
+git clone https://github.com/wg/wrk.git
+cd wrk
+make
+sudo cp wrk /usr/local/bin/
+
+# S3 API load test
+wrk -t 12 -c 400 -d 60s --latency \
+    -H "Authorization: AWS access_key:secret_key" \
+    http://filer-1:8333/test-bucket/
+
+# Filer API load test
+wrk -t 12 -c 400 -d 60s --latency \
+    http://filer-1:8888/test/
+```
+
+### Performance tuning чеклист
+
+- [ ] XFS с оптимальными mount options
+- [ ] I/O scheduler настроен (none для SSD, mq-deadline для HDD)
+- [ ] Kernel parameters оптимизированы (sysctl.conf)
+- [ ] File descriptors увеличены (ulimit)
+- [ ] Volume размер оптимизирован (30GB рекомендуется)
+- [ ] LevelDB выбран для индексов
+- [ ] PostgreSQL настроен для высокой нагрузки
+- [ ] Connection pooling настроен (PgBouncer)
+- [ ] Redis кэширование включено
+- [ ] CDN/Varnish для статики (опционально)
+- [ ] Мониторинг производительности активен
+- [ ] Регулярные benchmark тесты
+
+---
+
+## Troubleshooting
+
+### Частые проблемы и решения
+
+#### Проблема 1: Master не может выбрать лидера
+
+**Симптомы:**
+```
+Error: no leader found
+Raft cluster cannot reach consensus
+```
+
+**Диагностика:**
+
+```bash
+# Проверка статуса Raft
+curl http://master-1:9333/cluster/raft?pretty=y
+
+# Логи master серверов
+sudo journalctl -u seaweedfs-master -n 100
+```
+
+**Решение:**
+
+```bash
+# Вариант 1: Перезапуск master серверов по очереди
+for HOST in master-1 master-2 master-3; do
+    ssh $HOST "sudo systemctl restart seaweedfs-master"
+    sleep 10
+done
+
+# Вариант 2: Принудительный reset Raft (ОСТОРОЖНО!)
+weed shell -master=master-1:9333 << EOF
+cluster.raft.reset
+EOF
+
+# Вариант 3: Удаление поврежденных метаданных и восстановление
+sudo systemctl stop seaweedfs-master
+sudo rm -rf /data/seaweedfs/metadata/raft
+sudo systemctl start seaweedfs-master
+```
+
+#### Проблема 2: Volume сервер не подключается к Master
+
+**Симптомы:**
+```
+Error: cannot connect to master
+Volume server not visible in topology
+```
+
+**Диагностика:**
+
+```bash
+# Проверка доступности master
+curl http://master-1:9333/cluster/status
+
+# Проверка логов volume
+sudo journalctl -u seaweedfs-volume -n 100 | grep -i error
+
+# Проверка сети
+ping master-1
+telnet master-1 9333
+```
+
+**Решение:**
+
+```bash
+# Проверка firewall
+sudo firewall-cmd --list-all
+
+# Открытие портов если нужно
+sudo firewall-cmd --permanent --add-port=9333/tcp
+sudo firewall-cmd --reload
+
+# Проверка параметров запуска
+sudo systemctl cat seaweedfs-volume
+
+# Перезапуск с правильными параметрами
+sudo systemctl restart seaweedfs-volume
+```
+
+#### Проблема 3: Filer не может подключиться к базе данных
+
+**Симптомы:**
+```
+Error: connection to PostgreSQL failed
+Database timeout errors
+```
+
+**Диагностика:**
+
+```bash
+# Проверка подключения к PostgreSQL
+psql -h postgres-host -U seaweedfs -d seaweedfs -c "SELECT 1;"
+
+# Проверка логов filer
+sudo journalctl -u seaweedfs-filer -f
+
+# Проверка connections в PostgreSQL
+psql -h postgres-host -U postgres -c "SELECT count(*) FROM pg_stat_activity WHERE datname='seaweedfs';"
+```
+
+**Решение:**
+
+```bash
+# Увеличение max_connections в PostgreSQL
+sudo vim /etc/postgresql/14/main/postgresql.conf
+# max_connections = 200
+
+# Перезапуск PostgreSQL
+sudo systemctl restart postgresql
+
+# Очистка idle connections
+psql -h postgres-host -U postgres -c "
+SELECT pg_terminate_backend(pid) 
+FROM pg_stat_activity 
+WHERE datname='seaweedfs' 
+AND state='idle' 
+AND state_change < now() - interval '5 minutes';
+"
+
+# Настройка connection pooling (PgBouncer)
+```
+
+#### Проблема 4: Низкая производительность записи
+
+**Симптомы:**
+```
+Slow upload speeds
+High latency on writes
+Timeouts during uploads
+```
+
+**Диагностика:**
+
+```bash
+# Проверка I/O на volume серверах
+iostat -x 5
+
+# Проверка disk wait
+top
+# Смотреть на %wa (wait)
+
+# Проверка метрик volume
+curl http://volume-1-1:18080/metrics | grep weed_volume
+
+# Проверка сети
+iftop -i eth0
+```
+
+**Решение:**
+
+```bash
+# 1. Оптимизация I/O scheduler
+echo "mq-deadline" | sudo tee /sys/block/sdb/queue/scheduler
+
+# 2. Увеличение компрессии
+# В systemd service:
+-compactionMBps=200
+
+# 3. Проверка репликации
+# Снижение репликации для некритичных данных
+# 010 -> 000
+
+# 4. Добавление volume серверов
+# Увеличение параллелизма записи
+
+# 5. Tune filesystem
+sudo mount -o remount,noatime,nodiratime /data/disk1
+```
+
+#### Проблема 5: Заполнение дискового пространства
+
+**Симптомы:**
+```
+Error: no writable volumes
+Disk space full errors
+Cannot create new volumes
+```
+
+**Диагностика:**
+
+```bash
+# Проверка свободного места
+df -h | grep seaweedfs
+
+# Проверка volumes
+weed shell -master=master-1:9333 << EOF
+volume.list
+EOF
+
+# Проверка старых deleted volumes
+find /data/disk*/seaweedfs/volumes -name "*.dat" -ls
+```
+
+**Решение:**
+
+```bash
+# 1. Vacuum - удаление deleted файлов
+weed shell -master=master-1:9333 << EOF
+volume.vacuum -garbageThreshold=0.3
+EOF
+
+# 2. Принудительная компрессия
+weed shell -master=master-1:9333 << EOF
+volume.vacuum -force
+EOF
+
+# 3. Перемещение volumes на другие диски
+weed shell -master=master-1:9333 << EOF
+volume.move -source=volume-1-1:8080 -target=volume-2-1:8080 -volumeId=123
+EOF
+
+# 4. Добавление новых дисков/серверов
+
+# 5. Удаление старой коллекции (если применимо)
+weed shell -master=master-1:9333 << EOF
+collection.delete -collection=old-data
+EOF
+```
+
+#### Проблема 6: Потеря реплик
+
+**Симптомы:**
+```
+Replica count mismatch
+Missing replicas warnings
+Data unavailable errors
+```
+
+**Диагностика:**
+
+```bash
+# Проверка репликации
+weed shell -master=master-1:9333 << EOF
+volume.check.disk
+volume.check.replication
+EOF
+
+# Проверка конкретного volume
+curl "http://master-1:9333/dir/lookup?volumeId=123&pretty=y"
+```
+
+**Решение:**
+
+```bash
+# Автоматическое восстановление реплик
+weed shell -master=master-1:9333 << EOF
+volume.fix.replication
+EOF
+
+# Принудительная репликация
+weed shell -master=master-1:9333 << EOF
+volume.fix.replication -force
+EOF
+
+# Балансировка после восстановления
+weed shell -master=master-1:9333 << EOF
+volume.balance -force
+EOF
+
+# Если проблема персистит - проверка volume integrity
+weed shell -master=master-1:9333 << EOF
+volume.fsck -volumeId=123
+EOF
+```
+
+#### Проблема 7: S3 API authentication failures
+
+**Симптомы:**
+```
+403 Forbidden
+SignatureDoesNotMatch
+InvalidAccessKeyId
+```
+
+**Диагностика:**
+
+```bash
+# Проверка S3 config
+cat /etc/seaweedfs/s3.json
+
+# Тест подключения
+aws s3 ls --endpoint-url http://filer-1:8333 --debug
+
+# Проверка логов
+sudo journalctl -u seaweedfs-filer | grep -i s3
+```
+
+**Решение:**
+
+```bash
+# 1. Проверка credentials в s3.json
+sudo vim /etc/seaweedfs/s3.json
+
+# 2. Перезапуск filer после изменений
+sudo systemctl restart seaweedfs-filer
+
+# 3. Проверка прав доступа к файлу
+sudo chmod 600 /etc/seaweedfs/s3.json
+sudo chown seaweedfs:seaweedfs /etc/seaweedfs/s3.json
+
+# 4. Тест с curl
+curl -X PUT http://filer-1:8333/test-bucket \
+  -H "Authorization: AWS access_key:$(echo -n 'PUT\n\n\n\n/test-bucket' | \
+  openssl dgst -sha1 -hmac 'secret_key' -binary | base64)"
+```
+
+### Diagnostic scripts
+
+**Comprehensive health check:**
+
+```bash
+#!/bin/bash
+# comprehensive-check.sh
+
+echo "=== SeaweedFS Comprehensive Diagnostic ==="
+echo "Date: $(date)"
+echo ""
+
+# 1. Master check
+echo "### MASTER SERVERS ###"
+for HOST in master-1 master-2 master-3; do
+    echo "Checking $HOST..."
+    if curl -sf "http://$HOST:9333/cluster/status" > /dev/null 2>&1; then
+        STATUS=$(curl -s "http://$HOST:9333/cluster/status" | jq -r '.IsLeader')
+        echo "  ✓ $HOST is $([ "$STATUS" = "true" ] && echo 'LEADER' || echo 'FOLLOWER')"
+    else
+        echo "  ❌ $HOST is DOWN"
+    fi
+done
+
+# 2. Volume check
+echo ""
+echo "### VOLUME SERVERS ###"
+VOLUMES=$(curl -s "http://master-1:9333/dir/status" | \
+    jq -r '.Topology.DataCenters[].Racks[].DataNodes[] | "\(.Url) \(.VolumeCount) \(.MaxVolumeCount)"')
+echo "$VOLUMES" | while read URL CURRENT MAX; do
+    USAGE=$((CURRENT * 100 / MAX))
+    if [ $USAGE -gt 80 ]; then
+        echo "  ⚠️  $URL: ${CURRENT}/${MAX} volumes (${USAGE}%)"
+    else
+        echo "  ✓ $URL: ${CURRENT}/${MAX} volumes (${USAGE}%)"
+    fi
+done
+
+# 3. Filer check
+echo ""
+echo "### FILER SERVERS ###"
+for HOST in filer-1 filer-2 filer-3; do
+    if curl -sf "http://$HOST:8888/" > /dev/null 2>&1; then
+        echo "  ✓ $HOST
