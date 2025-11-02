@@ -243,9 +243,8 @@ WantedBy=multi-user.target
 # Создание директорий для каждого диска
 sudo mkdir -p /data/{disk1,disk2,disk3,disk4}/seaweedfs/volumes
 sudo chown -R seaweedfs:seaweedfs /data/*/seaweedfs
-```
+
 # Запуск с несколькими директориями
-```
 ExecStart=/usr/local/bin/weed volume \
   -ip=volume-1-1 \
   -port=8080 \
