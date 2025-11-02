@@ -271,7 +271,7 @@ ExecStart=/usr/local/bin/weed volume \
 -volume -ip=volume-3-2 -rack=rack-3 -dataCenter=dc1 ...
 ```
 Запуск Volume серверов
-bash
+```bash
 # На всех volume нодах
 sudo systemctl daemon-reload
 sudo systemctl enable seaweedfs-volume
@@ -284,9 +284,10 @@ curl http://volume-1-1:8080/status?pretty=y
 ```bash
 # Проверка томов в кластере
 weed shell -master=master-1:9333 "volume.list"
-```
+
 # Проверка распределения по rack
 curl http://master-1:9333/dir/status?pretty=y
+```
 Настройка Filer
 Конфигурация systemd для Filer
 Создайте /etc/systemd/system/seaweedfs-filer.service:
