@@ -154,8 +154,8 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 Конфигурационные файлы
 Создайте /etc/seaweedfs/master.conf:
-
-yaml
+```
+```yaml
 # Master server configuration
 ip: "master-1"
 port: 9333
@@ -177,8 +177,9 @@ pulseSeconds: 10
 whiteList:
   - "10.0.0.0/8"
   - "192.168.0.0/16"
+```
 Запуск Master кластера
-bash
+```bash
 # Создание пользователя и директорий
 sudo useradd -r -s /bin/false seaweedfs
 sudo mkdir -p /data/seaweedfs/{metadata,volumes}
@@ -192,8 +193,9 @@ sudo systemctl start seaweedfs-master
 # Проверка статуса
 sudo systemctl status seaweedfs-master
 weed shell -master=master-1:9333 "cluster.ps"
+```
 Проверка кластера Master
-bash
+```bash
 # Проверка здоровья кластера
 curl http://master-1:9333/cluster/status?pretty=y
 
@@ -202,10 +204,11 @@ curl http://master-1:9333/cluster/raft?pretty=y
 
 # Статус через weed shell
 weed shell -master=master-1:9333 "volume.list"
+```
 Установка и настройка Volume серверов
 Конфигурация systemd для Volume Server
 Создайте /etc/systemd/system/seaweedfs-volume.service:
-
+```
 ini
 [Unit]
 Description=SeaweedFS Volume Server
@@ -235,13 +238,14 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 Многодисковая конфигурация
 Для использования нескольких дисков:
-
-bash
+```
+```bash
 # Создание директорий для каждого диска
 sudo mkdir -p /data/{disk1,disk2,disk3,disk4}/seaweedfs/volumes
 sudo chown -R seaweedfs:seaweedfs /data/*/seaweedfs
-
+```
 # Запуск с несколькими директориями
+```
 ExecStart=/usr/local/bin/weed volume \
   -ip=volume-1-1 \
   -port=8080 \
@@ -250,8 +254,9 @@ ExecStart=/usr/local/bin/weed volume \
   -max=25 \
   -rack=rack-1 \
   -dataCenter=dc1
+```
 Настройка rack awareness
-bash
+```bash
 # Volume серверы в разных rack
 # Rack 1
 -volume -ip=volume-1-1 -rack=rack-1 -dataCenter=dc1 ...
@@ -264,6 +269,7 @@ bash
 # Rack 3
 -volume -ip=volume-3-1 -rack=rack-3 -dataCenter=dc1 ...
 -volume -ip=volume-3-2 -rack=rack-3 -dataCenter=dc1 ...
+```
 Запуск Volume серверов
 bash
 # На всех volume нодах
@@ -275,17 +281,17 @@ sudo systemctl start seaweedfs-volume
 sudo systemctl status seaweedfs-volume
 curl http://volume-1-1:8080/status?pretty=y
 Проверка Volume распределения
-bash
+```bash
 # Проверка томов в кластере
 weed shell -master=master-1:9333 "volume.list"
-
+```
 # Проверка распределения по rack
 curl http://master-1:9333/dir/status?pretty=y
 Настройка Filer
 Конфигурация systemd для Filer
 Создайте /etc/systemd/system/seaweedfs-filer.service:
 
-ini
+```ini
 [Unit]
 Description=SeaweedFS Filer Server
 After=network.target
@@ -323,6 +329,7 @@ ExecStart=/usr/local/bin/weed filer \
   -s3.domainName=s3.example.com \
   -s3.allowEmptyFolder=true \
   -s3.allowDeleteBucketNotEmpty=true
+```
 Настройка базы данных метаданных
 LevelDB (рекомендуется для production):
 
@@ -338,7 +345,7 @@ bash
 -filer.mysql.username=seaweedfs
 -filer.mysql.password=your-password
 Запуск Filer
-bash
+```bash
 # Создание директорий
 sudo mkdir -p /data/seaweedfs/filer
 sudo chown -R seaweedfs:seaweedfs /data/seaweedfs/filer
@@ -350,6 +357,7 @@ sudo systemctl start seaweedfs-filer
 
 # Проверка
 curl http://filer-1:8888/?pretty=y
+```
 Настройка репликации и Rack Awareness
 Схемы репликации
 SeaweedFS поддерживает гибкие схемы репликации:
@@ -373,22 +381,24 @@ bash
 weed shell -master=master-1:9333 "volume.create -replication=010 -collection=important-data"
 Rack и Data Center конфигурация
 bash
+```
 # Volume серверы с разными rack/DC
 -volume -ip=10.0.1.11 -rack=rack1 -dataCenter=dc1
 -volume -ip=10.0.1.12 -rack=rack1 -dataCenter=dc1
 -volume -ip=10.0.2.11 -rack=rack2 -dataCenter=dc1  
 -volume -ip=10.0.3.11 -rack=rack3 -dataCenter=dc1
 -volume -ip=10.1.1.11 -rack=rack1 -dataCenter=dc2
+```
 Проверка распределения
-bash
+```bash
 # Проверка topology
 curl http://master-1:9333/cluster/status?pretty=y
-
+```
 # Проверка распределения томов
 weed shell -master=master-1:9333 "volume.check.disk"
 Балансировка нагрузки
 Nginx для Master серверов
-nginx
+```nginx
 upstream seaweedfs_masters {
     least_conn;
     server master-1:9333 max_fails=3 fail_timeout=30s;
@@ -448,9 +458,10 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
     }
 }
+```
 Мониторинг и метрики
 Prometheus конфигурация
-yaml
+```yaml
 # prometheus.yml
 scrape_configs:
   - job_name: 'seaweedfs_master'
@@ -476,9 +487,10 @@ scrape_configs:
         - 'filer-1:9093'
         - 'filer-2:9093'
     scrape_interval: 30s
+```
 Ключевые метрики для мониторинга
 Master метрики:
-
+```
 seaweedfs_master_leader — является ли нода лидером
 
 seaweedfs_master_volume_count — количество томов
@@ -502,12 +514,12 @@ Filer метрики:
 seaweedfs_filer_request_count — количество запросов
 
 seaweedfs_filer_error_count — ошибки
-
+```
 Grafana дашборды
 Используйте официальные дашборды SeaweedFS или создайте свои на основе ключевых метрик.
 
 Health checks
-bash
+```bash
 #!/bin/bash
 # health-check.sh
 
@@ -527,6 +539,7 @@ fi
 
 echo "All services healthy"
 exit 0
+```
 Backup и восстановление
 Filer backup
 bash
@@ -561,6 +574,7 @@ weed shell -master=master-1:9333 "volume.create -replication=100"
 Оптимизация Volume серверов
 bash
 # Параметры запуска volume сервера
+```
 -volume \
   -compactionMBps=200 \          # Ограничение скорости компрессии
   -idleTimeout=30 \              # Таймаут idle томов
@@ -569,15 +583,18 @@ bash
   -read.redirect=true \          # Редирект чтения
   -cpuProfile= \                 # Отключение CPU профилирования в prod
   -memProfile=                   # Отключение memory профилирования
+```
 Оптимизация Filer
 bash
 # Параметры filer для высокой нагрузки
+```
 -filer \
   -concurrentWalSize=1000 \      # Размер WAL
   -leveldb2.blockCacheSize=256 \ # Кэш для LevelDB
   -leveldb2.writeBufferSize=64 \ # Write buffer
   -disableDirListing=false \     # Включить листинг директорий
   -maxMB=0                       # Без ограничения размера файла
+```
 Системные оптимизации
 bash
 # Увеличение лимитов ядра
