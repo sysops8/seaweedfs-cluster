@@ -3232,4 +3232,589 @@ echo ""
 echo "### FILER SERVERS ###"
 for HOST in filer-1 filer-2 filer-3; do
     if curl -sf "http://$HOST:8888/" > /dev/null 2>&1; then
-        echo "  ✓ $HOST
+        echo "  ✓ $HOST is UP"
+    else
+        echo "  ❌ $HOST is DOWN"
+    fi
+done
+
+# 4. Replication check
+echo ""
+echo "### REPLICATION STATUS ###"
+ISSUES=$(curl -s "http://master-1:9333/vol/status" | \
+    jq -r '.Volumes[] | select(.ReplicaPlacement != .FileCount) | .Id' | wc -l)
+if [ "$ISSUES" -eq 0 ]; then
+    echo "  ✓ All volumes properly replicated"
+else
+    echo "  ❌ $ISSUES volumes with replication issues"
+fi
+
+# 5. Disk space check
+echo ""
+echo "### DISK SPACE ###"
+TOTAL=$(curl -s "http://master-1:9333/dir/status" | jq -r '.Topology.Max')
+FREE=$(curl -s "http://master-1:9333/dir/status" | jq -r '.Topology.Free')
+USED=$((TOTAL - FREE))
+USAGE=$((USED * 100 / TOTAL))
+
+if [ $USAGE -gt 90 ]; then
+    echo "  ❌ Critical: ${USAGE}% used"
+elif [ $USAGE -gt 80 ]; then
+    echo "  ⚠️  Warning: ${USAGE}% used"
+else
+    echo "  ✓ OK: ${USAGE}% used"
+fi
+
+echo ""
+echo "=== End of Diagnostic ==="
+```
+
+```bash
+chmod +x /usr/local/bin/comprehensive-check.sh
+```
+
+### Debug mode и логирование
+
+**Включение debug режима:**
+
+```bash
+# Для master
+sudo systemctl edit seaweedfs-master
+# Добавить:
+[Service]
+Environment="WEED_DEBUG=true"
+
+# Для volume
+sudo systemctl edit seaweedfs-volume
+[Service]
+Environment="WEED_DEBUG=true"
+
+# Для filer
+sudo systemctl edit seaweedfs-filer
+[Service]
+Environment="WEED_DEBUG=true"
+
+# Перезапуск
+sudo systemctl daemon-reload
+sudo systemctl restart seaweedfs-master seaweedfs-volume seaweedfs-filer
+```
+
+**Увеличение verbosity логов:**
+
+```bash
+# Добавить параметр -v в ExecStart
+-v=3  # Level 3 - detailed logging
+-v=4  # Level 4 - very detailed
+```
+
+### Network troubleshooting
+
+**Проверка связности между серверами:**
+
+```bash
+#!/bin/bash
+# network-check.sh
+
+MASTERS=(master-1:9333 master-2:9333 master-3:9333)
+VOLUMES=(volume-1-1:8080 volume-2-1:8080 volume-3-1:8080)
+FILERS=(filer-1:8888 filer-2:8888 filer-3:8888)
+
+echo "=== Network Connectivity Check ==="
+
+# Check masters
+echo "Checking masters..."
+for MASTER in "${MASTERS[@]}"; do
+    if timeout 5 bash -c "echo > /dev/tcp/${MASTER/:/ }" 2>/dev/null; then
+        echo "  ✓ $MASTER reachable"
+    else
+        echo "  ❌ $MASTER unreachable"
+    fi
+done
+
+# Check volumes
+echo "Checking volumes..."
+for VOLUME in "${VOLUMES[@]}"; do
+    if timeout 5 bash -c "echo > /dev/tcp/${VOLUME/:/ }" 2>/dev/null; then
+        echo "  ✓ $VOLUME reachable"
+    else
+        echo "  ❌ $VOLUME unreachable"
+    fi
+done
+
+# Check filers
+echo "Checking filers..."
+for FILER in "${FILERS[@]}"; do
+    if timeout 5 bash -c "echo > /dev/tcp/${FILER/:/ }" 2>/dev/null; then
+        echo "  ✓ $FILER reachable"
+    else
+        echo "  ❌ $FILER unreachable"
+    fi
+done
+```
+
+### Полезные команды для troubleshooting
+
+```bash
+# Проверка открытых файлов
+lsof -u seaweedfs | wc -l
+
+# Проверка сетевых соединений
+netstat -an | grep -E ':(9333|8080|8888|8333)'
+
+# Проверка процессов
+ps aux | grep weed
+
+# Проверка использования ресурсов
+top -u seaweedfs
+
+# Trace системных вызовов
+strace -p $(pidof weed) -e trace=network
+
+# Проверка DNS разрешения
+nslookup master-1
+dig master-1
+
+# Trace HTTP запросов
+tcpdump -i eth0 -s 0 -A 'tcp port 8080'
+```
+
+---
+
+## Production чеклист
+
+### Pre-deployment чеклист
+
+#### Инфраструктура
+- [ ] Минимум 3 master сервера для HA
+- [ ] Минимум 6 volume серверов (2 на rack)
+- [ ] Минимум 2 filer сервера
+- [ ] Балансировщики нагрузки настроены (Nginx/HAProxy)
+- [ ] Firewall правила настроены
+- [ ] DNS записи созданы
+- [ ] SSL сертификаты установлены (для S3/Filer API)
+
+#### Хранение
+- [ ] Диски отформатированы в XFS
+- [ ] Mount options оптимизированы (noatime, nodiratime)
+- [ ] I/O scheduler настроен правильно
+- [ ] Минимум 10% свободного места на дисках
+- [ ] RAID не используется (SeaweedFS сам управляет репликацией)
+
+#### Настройки системы
+- [ ] Kernel parameters оптимизированы (sysctl.conf)
+- [ ] File descriptors увеличены (ulimit)
+- [ ] Swap отключен или минимален (swappiness=10)
+- [ ] NTP синхронизация настроена
+- [ ] Timezone корректен на всех серверах
+
+#### Конфигурация SeaweedFS
+- [ ] Master peers настроены корректно
+- [ ] Репликация настроена (010 или выше)
+- [ ] Volume size оптимален (30GB)
+- [ ] Rack/DC awareness настроен
+- [ ] Filer база данных (PostgreSQL) настроена
+- [ ] S3 credentials созданы
+- [ ] Collection strategy определена
+
+#### Безопасность
+- [ ] Пользователь seaweedfs создан (non-root)
+- [ ] Права доступа к файлам настроены (750/600)
+- [ ] Firewall включен и настроен
+- [ ] SELinux/AppArmor настроен (если используется)
+- [ ] Сеть изолирована (private VLAN)
+- [ ] TLS включен для внешних API
+
+#### Мониторинг
+- [ ] Prometheus установлен и настроен
+- [ ] Node exporter установлен на всех серверах
+- [ ] Grafana dashboards импортированы
+- [ ] Alert rules настроены
+- [ ] Alertmanager настроен (email/Slack/PagerDuty)
+- [ ] Health check скрипты созданы
+
+#### Backup
+- [ ] Master metadata backup настроен
+- [ ] Filer database backup настроен
+- [ ] Backup retention policy определена
+- [ ] Restore процедура протестирована
+- [ ] Offsite backup настроен
+
+#### Документация
+- [ ] Network diagram создан
+- [ ] Server inventory задокументирован
+- [ ] Runbook создан для операций
+- [ ] Disaster recovery план написан
+- [ ] Контакты on-call команды определены
+
+### Post-deployment чеклист
+
+#### Функциональное тестирование
+- [ ] Master cluster выбрал лидера
+- [ ] Все volume серверы подключены
+- [ ] Filer доступен и работает
+- [ ] S3 API отвечает
+- [ ] Загрузка файлов работает
+- [ ] Скачивание файлов работает
+- [ ] Репликация работает корректно
+- [ ] Балансировщик распределяет нагрузку
+
+#### Performance тестирование
+- [ ] Upload benchmark выполнен
+- [ ] Download benchmark выполнен
+- [ ] Latency в пределах SLA
+- [ ] Throughput соответствует ожиданиям
+- [ ] Concurrent connections тест пройден
+
+#### Отказоустойчивость
+- [ ] Failover master протестирован
+- [ ] Потеря volume сервера не ломает систему
+- [ ] Потеря filer не ломает систему
+- [ ] Восстановление после перезагрузки работает
+- [ ] Репликация восстанавливается автоматически
+
+#### Мониторинг
+- [ ] Метрики собираются корректно
+- [ ] Dashboards отображают данные
+- [ ] Alerts срабатывают
+- [ ] Логи централизованно собираются
+- [ ] Health checks проходят
+
+#### Операционная готовность
+- [ ] Команда обучена управлению кластером
+- [ ] Runbook актуален
+- [ ] On-call rotation настроен
+- [ ] Эскалация процессов определена
+- [ ] Backup/restore протестированы
+
+### Monthly maintenance чеклист
+
+- [ ] Проверка disk space (должно быть >20% свободно)
+- [ ] Проверка replication integrity
+- [ ] Vacuum старых deleted файлов
+- [ ] Проверка backup (restore test)
+- [ ] Обновление OS security patches
+- [ ] Проверка logs на errors/warnings
+- [ ] Review Grafana dashboards
+- [ ] Проверка certificate expiration (SSL)
+- [ ] Performance benchmark
+- [ ] Capacity planning review
+
+### Quarterly maintenance чеклист
+
+- [ ] SeaweedFS version upgrade (если доступно)
+- [ ] PostgreSQL upgrade (minor version)
+- [ ] OS upgrade (если требуется)
+- [ ] Disaster recovery drill
+- [ ] Security audit
+- [ ] Performance tuning review
+- [ ] Capacity expansion planning
+- [ ] Documentation update
+- [ ] Team training refresh
+
+### Upgrade процедура
+
+**Безопасное обновление SeaweedFS:**
+
+```bash
+#!/bin/bash
+# upgrade-seaweedfs.sh
+
+NEW_VERSION="3.60"
+BACKUP_DIR="/backup/seaweedfs/upgrade-$(date +%Y%m%d)"
+
+echo "=== SeaweedFS Upgrade to $NEW_VERSION ==="
+echo "Date: $(date)"
+echo ""
+
+# 1. Создание backup
+echo "Step 1: Creating backups..."
+mkdir -p "$BACKUP_DIR"
+/usr/local/bin/backup-master.sh
+/usr/local/bin/backup-filer-db.sh
+
+# 2. Скачивание новой версии
+echo "Step 2: Downloading new version..."
+cd /tmp
+wget "https://github.com/seaweedfs/seaweedfs/releases/download/$NEW_VERSION/linux_amd64.tar.gz"
+tar -xzf linux_amd64.tar.gz
+
+# 3. Backup текущего бинарного файла
+echo "Step 3: Backing up current binary..."
+sudo cp /usr/local/bin/weed "$BACKUP_DIR/weed.old"
+
+# 4. Установка нового бинарного файла
+echo "Step 4: Installing new binary..."
+sudo cp weed /usr/local/bin/weed
+sudo chmod +x /usr/local/bin/weed
+sudo chown root:root /usr/local/bin/weed
+
+# 5. Проверка версии
+echo "Step 5: Verifying new version..."
+NEW_VER=$(weed version | grep -oP 'version \K[0-9.]+')
+echo "Installed version: $NEW_VER"
+
+# 6. Rolling restart - Filer (non-critical)
+echo "Step 6: Restarting filer servers..."
+for HOST in filer-1 filer-2 filer-3; do
+    echo "  Restarting $HOST..."
+    ssh $HOST "sudo systemctl restart seaweedfs-filer"
+    sleep 30
+    
+    # Проверка здоровья
+    if ssh $HOST "sudo systemctl is-active --quiet seaweedfs-filer"; then
+        echo "  ✓ $HOST is healthy"
+    else
+        echo "  ❌ $HOST failed to start!"
+        exit 1
+    fi
+done
+
+# 7. Rolling restart - Volume servers
+echo "Step 7: Restarting volume servers..."
+for HOST in volume-1-1 volume-1-2 volume-2-1 volume-2-2 volume-3-1 volume-3-2; do
+    echo "  Restarting $HOST..."
+    ssh $HOST "sudo systemctl restart seaweedfs-volume"
+    sleep 60  # Больше времени для volumes
+    
+    if ssh $HOST "sudo systemctl is-active --quiet seaweedfs-volume"; then
+        echo "  ✓ $HOST is healthy"
+    else
+        echo "  ❌ $HOST failed to start!"
+        exit 1
+    fi
+done
+
+# 8. Rolling restart - Master servers (critical!)
+echo "Step 8: Restarting master servers..."
+for HOST in master-2 master-3 master-1; do  # Leader последним
+    echo "  Restarting $HOST..."
+    ssh $HOST "sudo systemctl restart seaweedfs-master"
+    sleep 60
+    
+    # Проверка Raft consensus
+    if curl -sf "http://$HOST:9333/cluster/status" > /dev/null; then
+        echo "  ✓ $HOST is healthy"
+    else
+        echo "  ❌ $HOST failed to start!"
+        exit 1
+    fi
+done
+
+# 9. Final health check
+echo "Step 9: Final health check..."
+/usr/local/bin/check-cluster-health.sh
+
+echo ""
+echo "✓ Upgrade completed successfully!"
+echo "New version: $NEW_VER"
+```
+
+### Emergency procedures
+
+**Процедура экстренного восстановления:**
+
+```markdown
+# Emergency Response Procedures
+
+## Полная потеря Master кластера
+
+1. **Stop все компоненты**
+   ```bash
+   for HOST in volume-* filer-*; do
+       ssh $HOST "sudo systemctl stop seaweedfs-*"
+   done
+   ```
+
+2. **Восстановить master из последнего backup**
+   ```bash
+   for HOST in master-1 master-2 master-3; do
+       scp /backup/master-metadata-latest.tar.gz $HOST:/tmp/
+       ssh $HOST "/usr/local/bin/restore-master.sh /tmp/master-metadata-latest.tar.gz"
+   done
+   ```
+
+3. **Запустить master кластер**
+   ```bash
+   for HOST in master-1 master-2 master-3; do
+       ssh $HOST "sudo systemctl start seaweedfs-master"
+       sleep 30
+   done
+   ```
+
+4. **Проверить выбор лидера**
+   ```bash
+   curl http://master-1:9333/cluster/status?pretty=y
+   ```
+
+5. **Запустить volume и filer серверы**
+   ```bash
+   for HOST in volume-* filer-*; do
+       ssh $HOST "sudo systemctl start seaweedfs-*"
+   done
+   ```
+
+## Потеря базы данных Filer
+
+1. **Stop все filer серверы**
+2. **Восстановить PostgreSQL из backup**
+3. **Restart filer серверы**
+4. **Verify filesystem через S3 API**
+
+## Критическая нехватка места
+
+1. **Немедленно запустить vacuum**
+   ```bash
+   weed shell -master=master-1:9333 << EOF
+   volume.vacuum -garbageThreshold=0.3 -force
+   EOF
+   ```
+
+2. **Добавить экстренный volume сервер**
+
+3. **Migrate данные с полных дисков**
+
+4. **Plan capacity expansion**
+
+## Контакты для эскалации
+
+- **L1 Support**: team@example.com
+- **L2 Support**: oncall@example.com
+- **L3 Support**: senior-eng@example.com
+- **Emergency**: +1-XXX-XXX-XXXX
+```
+
+### Capacity planning
+
+**Формулы для планирования роста:**
+
+```python
+#!/usr/bin/env python3
+# capacity-planner.py
+
+def calculate_capacity(
+    num_volumes_servers,
+    disks_per_server,
+    disk_size_tb,
+    replication_factor,
+    growth_rate_percent,
+    months_ahead
+):
+    """
+    Рассчитывает capacity и потребности в расширении
+    """
+    # Raw capacity
+    raw_capacity_tb = num_volumes_servers * disks_per_server * disk_size_tb
+    
+    # Usable capacity с учетом репликации
+    usable_capacity_tb = raw_capacity_tb / replication_factor
+    
+    # Предполагаемый рост
+    monthly_growth = usable_capacity_tb * (growth_rate_percent / 100)
+    projected_usage = usable_capacity_tb * 0.7  # Текущее 70%
+    
+    months_until_full = (usable_capacity_tb * 0.9 - projected_usage) / monthly_growth
+    
+    print(f"=== Capacity Planning Report ===")
+    print(f"Current Configuration:")
+    print(f"  Volume Servers: {num_volumes_servers}")
+    print(f"  Disks per Server: {disks_per_server}")
+    print(f"  Disk Size: {disk_size_tb}TB")
+    print(f"  Replication Factor: {replication_factor}")
+    print(f"")
+    print(f"Capacity:")
+    print(f"  Raw Capacity: {raw_capacity_tb:.1f}TB")
+    print(f"  Usable Capacity: {usable_capacity_tb:.1f}TB")
+    print(f"  Current Usage (70%): {projected_usage:.1f}TB")
+    print(f"")
+    print(f"Growth Projection:")
+    print(f"  Monthly Growth Rate: {growth_rate_percent}%")
+    print(f"  Monthly Growth: {monthly_growth:.1f}TB")
+    print(f"  Months Until 90% Full: {months_until_full:.1f}")
+    print(f"")
+    
+    if months_until_full < 6:
+        print(f"⚠️  WARNING: Capacity will be exhausted in {months_until_full:.1f} months!")
+        print(f"   Action required: Plan expansion immediately")
+    elif months_until_full < 12:
+        print(f"⚠️  NOTICE: Capacity sufficient for {months_until_full:.1f} months")
+        print(f"   Action required: Start planning expansion")
+    else:
+        print(f"✓ Capacity sufficient for {months_until_full:.1f} months")
+    
+    # Рекомендации по расширению
+    if months_until_full < 12:
+        additional_servers = int((monthly_growth * 12) / (disks_per_server * disk_size_tb / replication_factor)) + 1
+        print(f"")
+        print(f"Expansion Recommendation:")
+        print(f"  Add {additional_servers} volume servers")
+        print(f"  This will provide capacity for ~12 months")
+
+# Пример использования
+if __name__ == "__main__":
+    calculate_capacity(
+        num_volumes_servers=9,
+        disks_per_server=8,
+        disk_size_tb=6,
+        replication_factor=2,
+        growth_rate_percent=5,  # 5% месячный рост
+        months_ahead=12
+    )
+```
+
+### Final recommendations
+
+**Best practices для production:**
+
+1. **Всегда используйте нечетное количество master серверов** (3, 5, 7)
+2. **Минимум 2 копии данных** (репликация 010 или выше)
+3. **Rack awareness обязателен** для production
+4. **Мониторинг 24/7** с алертами
+5. **Автоматизированные backup** ежедневно
+6. **Тестирование restore** ежемесячно
+7. **Capacity planning** ежеквартально
+8. **Rolling upgrades** для zero-downtime
+9. **Документация актуальна** всегда
+10. **Disaster recovery plan** протестирован
+
+**Типичные ошибки, которых следует избегать:**
+
+- ❌ Использование RAID под SeaweedFS
+- ❌ Одинаковые volume серверы в одном rack без репликации
+- ❌ Отсутствие мониторинга
+- ❌ Отсутствие backup метаданных
+- ❌ Игнорирование disk space warnings
+- ❌ Upgrade всех серверов одновременно
+- ❌ Использование репликации 000 в production
+- ❌ Недостаточное тестирование перед production
+- ❌ Отсутствие capacity planning
+- ❌ Single point of failure в инфраструктуре
+
+---
+
+## Заключение
+
+Этот гайд покрывает все аспекты установки и эксплуатации SeaweedFS в production окружении. Следуя этим рекомендациям, вы получите:
+
+- **Высокую доступность**: 99.9%+ uptime с правильной репликацией
+- **Масштабируемость**: от сотен миллионов до миллиардов файлов
+- **Производительность**: низкая latency и высокий throughput
+- **Надежность**: защита данных и быстрое восстановление
+- **Управляемость**: простая эксплуатация и мониторинг
+
+### Дополнительные ресурсы
+
+- **Официальная документация**: https://github.com/seaweedfs/seaweedfs/wiki
+- **Community форум**: https://github.com/seaweedfs/seaweedfs/discussions
+- **Issue tracker**: https://github.com/seaweedfs/seaweedfs/issues
+- **Slack community**: https://seaweedfs.slack.com
+- **Examples**: https://github.com/seaweedfs/seaweedfs/tree/master/examples
+
+### Поддержка
+
+Для получения помощи:
+- GitHub Issues для bug reports
+- GitHub Discussions для вопросов
+- Enterprise support от SeaweedFS команды
+- Community Slack для быстрых вопросов
+
+**Успешного развертывания! 🚀**
