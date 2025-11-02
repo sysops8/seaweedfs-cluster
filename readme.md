@@ -373,15 +373,16 @@ SeaweedFS поддерживает гибкие схемы репликации:
 200 — две реплики в разных DC
 
 Настройка replication policy
-bash
+```bash
 # Глобальная настройка при запуске master
 -defaultReplication=010
 
 # Или на уровне коллекции
 weed shell -master=master-1:9333 "volume.create -replication=010 -collection=important-data"
-Rack и Data Center конфигурация
-bash
 ```
+Rack и Data Center конфигурация
+
+```bash
 # Volume серверы с разными rack/DC
 -volume -ip=10.0.1.11 -rack=rack1 -dataCenter=dc1
 -volume -ip=10.0.1.12 -rack=rack1 -dataCenter=dc1
@@ -393,9 +394,10 @@ bash
 ```bash
 # Проверка topology
 curl http://master-1:9333/cluster/status?pretty=y
-```
+
 # Проверка распределения томов
 weed shell -master=master-1:9333 "volume.check.disk"
+```
 Балансировка нагрузки
 Nginx для Master серверов
 ```nginx
