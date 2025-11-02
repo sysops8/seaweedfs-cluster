@@ -624,7 +624,7 @@ curl http://master-1:9333/cluster/raft?pretty=y
 sudo systemctl restart seaweedfs-master
 Проблема: Volume серверы не регистрируются
 
-bash
+```bash
 # Проверка подключения к master
 telnet master-1 9333
 
@@ -640,17 +640,17 @@ iostat -x 1
 
 # Проверка сети
 iperf3 -c volume-server-1
-
+```
 # Решение: оптимизация компрессии и проверка дисков
 Проблема: Filer не отвечает
 
-bash
+```bash
 # Проверка базы данных filer
 weed shell -filer=filer-1:8888 "fs.du /"
-
+```
 # Решение: проверка подключения к master и объема памяти
 Полезные команды диагностики
-bash
+```bash
 # Статус кластера
 weed shell -master=master-1:9333 "cluster.ps"
 
@@ -665,8 +665,9 @@ weed shell -filer=filer-1:8888 "fs.du /"
 
 # Статистика использования
 curl http://master-1:9333/cluster/status?pretty=y
+```
 Логирование и отладка
-bash
+```bash
 # Включение debug логирования
 -master.defaultLogLevel=debug
 -volume.defaultLogLevel=info
@@ -676,20 +677,18 @@ bash
 sudo journalctl -u seaweedfs-master -f
 sudo journalctl -u seaweedfs-volume -f  
 sudo journalctl -u seaweedfs-filer -f
-Production рекомендации
+```
+## Production рекомендации
 Архитектурные рекомендации
 Всегда используйте нечетное количество master серверов (3, 5, 7)
 
 Размещайте volume серверы в разных rack/DC для отказоустойчивости
-
 Используйте отдельные сети для данных и управления
-
 Настройте мониторинг всех компонентов с алертами
-
 Регулярно тестируйте процедуры восстановления
 
 Безопасность
-bash
+```bash
 # Ограничение доступа к master
 -whiteList=10.0.0.0/8,192.168.0.0/16
 
@@ -700,17 +699,15 @@ bash
 
 # Аутентификация для S3
 -s3.config=/etc/seaweedfs/s3-credentials.json
+```
 Резервное копирование
 Регулярный backup filer метаданных
-
 Snapshot томов для point-in-time восстановления
-
 Cross-DC репликация для критичных данных
-
 Тестирование восстановления каждые 3 месяца
 
 Мониторинг емкости
-bash
+```bash
 #!/bin/bash
 # capacity-alert.sh
 
@@ -719,6 +716,7 @@ if (( $(echo "$CAPACITY > 85" | bc -l) )); then
     echo "WARNING: Cluster capacity at ${CAPACITY}%"
     # Отправка алерта
 fi
+```
 Обновление версий
 Тестируйте обновления в staging среде
 
@@ -734,28 +732,28 @@ fi
 Добавление нового volume сервера:
 
 bash
-# Просто запустите новый volume сервер
+### Просто запустите новый volume сервер
 sudo systemctl start seaweedfs-volume
 Удаление volume сервера:
 
 bash
-# Дождитесь миграции данных
+### Дождитесь миграции данных
 weed shell -master=master-1:9333 "volume.balance -force"
 
-# Остановите сервер
+### Остановите сервер
 sudo systemctl stop seaweedfs-volume
 Замена диска:
 
 bash
-# Остановите volume сервер
+### Остановите volume сервер
 sudo systemctl stop seaweedfs-volume
 
-# Замените диск и перемонтируйте
+###  Замените диск и перемонтируйте
 sudo umount /data/disk1
-# ... замена диска ...
+### ... замена диска ...
 sudo mount /data/disk1
 
-# Запустите volume сервер
+### Запустите volume сервер
 sudo systemctl start seaweedfs-volume
 Заключение
 SeaweedFS предоставляет мощную и гибкую платформу для распределенного хранения данных в production средах. Ключевые преимущества:
